@@ -16,6 +16,13 @@
 #
 #             SVachra is a play on the word “chakra” and refers to the ability to detect Structural Variation by
 #             simultaneously evaluating inward and outward facing read data.
+#
+#program output:  Base_Name equals the bamfile name given by the user
+#                 1. Base_Name.hist.txt         - Fragment_Lengths(bins) and Read_Pair_Counts to plot distributions of seq. library fragment sizes
+#                 2. Base_Name.svp              - Main Output: listing of all structural variation annotations [types: INS,DEL,INV,ITX,CTX]
+#                 3. Base_Name.bed              - Bed File of all structural variation annotations
+#                 4. Base_Name.circos.link.txt  - Circos Link input file of all structural variation annotations
+#
 
 require 'getoptlong'
 require 'fileutils'
@@ -1063,7 +1070,7 @@ puts "TOTAL BAM FILE ENTRIES: #{total}"
 
 base_name = optHash["--BAMFile"]
 
-hist_out = base_name + "-hist.txt"
+hist_out = base_name + ".hist.txt"
 hist_out_file = File.open(hist_out, "w") 
 
 hist_hash = Hash::new(0)
