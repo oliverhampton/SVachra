@@ -1047,7 +1047,7 @@ if( optHash.key?("--ScreenOutBedFile") )
   }
 end
 
-if( optHash.key?("--min_mapping_quality" )
+if( optHash.key?("--min_mapping_quality") )
   MIN_MAPPING_QUALITY = optHash["--min_mapping_quality"].to_i
 else
   MIN_MAPPING_QUALITY = 0
