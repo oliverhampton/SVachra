@@ -22,7 +22,9 @@
 #                 2. Base_Name.svp              - Main Output: listing of all structural variation annotations [types: INS,DEL,INV,ITX,CTX]
 #                 3. Base_Name.bed              - Bed File of all structural variation annotations
 #                 4. Base_Name.circos.link.txt  - Circos Link input file of all structural variation annotations
-#
+#                 5. Base_Name.lff              - lff format file (http://www.genboree.org/java-bin/showHelp.jsp?topic=lffFileFormat)
+#                                                 for structural variation annotation visualization in Genboree (http://www.genboree.org)
+#                                                 and is the input file for the automated Breakpoint-Primer-Design pipeline
 
 require 'getoptlong'
 require 'fileutils'
