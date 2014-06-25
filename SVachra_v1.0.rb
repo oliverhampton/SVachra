@@ -1,9 +1,9 @@
 #!/hgsc_software/ruby/latest/bin/ruby
 # -*- coding: utf-8 -*-
 
-#name: SVachra_v1.9.rb
+#name: SVachra_v1.0.rb
 #author: Oliver A. Hampton
-#date: Feb 25, 2014
+#date: June 20, 2014
 #description: SVachra – Structural Variation Assesment of CHRomosomal Aberrations
 #             A structural variation breakpoint caller that uses discordant mate pair reads consisting of both
 #             inward and outward facing read types; such as the data delivered by Illumina mate pair and Nextera
@@ -20,9 +20,11 @@
 #program output:  Base_Name equals the bamfile name given by the user
 #                 1. Base_Name.hist.txt         - Fragment_Lengths(bins) and Read_Pair_Counts to plot distributions of seq. library fragment sizes
 #                 2. Base_Name.svp              - Main Output: listing of all structural variation annotations [types: INS,DEL,INV,ITX,CTX]
-#                 3. Base_Name.bed              - Bed File of all structural variation annotations
-#                 4. Base_Name.circos.link.txt  - Circos Link input file of all structural variation annotations
-#                 5. Base_Name.lff              - lff format file (http://www.genboree.org/java-bin/showHelp.jsp?topic=lffFileFormat)
+#                 3. Base_Name.bed              - Bed File of Intra-Chromosomal rearrangements
+#                 4. Base_Name.bedpe            - Bed File of Inter-Chromosomal rearrangements
+#                 5. Base_Name.circos.link.txt  - Circos Link input file of Inter-Chromosomal structural variation annotations
+#                 6. Base_Name.circos.tile.txt  - Circos Link input file of Intra-Chromosomal structural variation annotation
+#                 6. Base_Name.lff              - lff format file (http://www.genboree.org/java-bin/showHelp.jsp?topic=lffFileFormat)
 #                                                 for structural variation annotation visualization in Genboree (http://www.genboree.org)
 #                                                 and is the input file for the automated Breakpoint-Primer-Design pipeline
 
@@ -55,6 +57,7 @@ def processArguments()
                   ['--ScreenOutBedFile', '-b', GetoptLong::OPTIONAL_ARGUMENT],
                   ['--min_cluster_count', '-c', GetoptLong::OPTIONAL_ARGUMENT],
                   ['--min_mapping_quality', '-m', GetoptLong::OPTIONAL_ARGUMENT],
+                  ['--Unique_Mapping', '-u', GetoptLong::NO_ARGUMENT],
                   ['--SVname', '-n', GetoptLong::OPTIONAL_ARGUMENT],
                   ['--SV_QC_Filtering', '-s', GetoptLong::NO_ARGUMENT],
                   ['--help', '-h', GetoptLong::NO_ARGUMENT]  ]
@@ -81,6 +84,7 @@ def processArguments()
     puts "                      -c minimun number of non-overlapping read pairs to call breakpoint (DEFAULT=2)"
     puts "                      -m minimum mapping quaility threshold (DEFAULT=0)"
     puts "                      -n SV annoation name - appended with incrementing integer (DEFAULT=SV)"
+    puts "                      -u Consider Unique mapping tag (XT:A:U) reads only (optional)" 
     puts "                      -s SV cluster quality control filter based on proximity overlaps (optional)" 
     puts "help                  --help          [-h]"
   end
@@ -1312,6 +1316,13 @@ else
   MIN_CLUSTER_COUNT = 2
 end
 
+if( optHash.key?("--Unique_Mapping") )
+  UNIQUE_READ_TAG = "XT:A:U"
+else
+  UNIQUE_READ_TAG = nil
+end
+
+
 clusterHash = Hash.new{|hh,kk| hh[kk]=Hash.new{|mm,nn| mm[nn]=Array.new}}
 
 puts "STARTING: Reading in #{optHash["--BAMFile"]} BAM and Building Discordant Read Clusters..."
@@ -1321,108 +1332,110 @@ cmd.each_line{ |line|
   counter += 1
   line.chomp!
   arrSplit = line.split(/\t/)
-  if( arrSplit[4].to_i >= MIN_MAPPING_QUALITY )
-    id = arrSplit[0]
-    chrm1 = arrSplit[2]
-    pos1 = arrSplit[3].to_i
-    if(arrSplit[6] == '=')
-      chrm2 = arrSplit[2]
-    else
-      chrm2 = arrSplit[6]
-    end
-    pos2 = arrSplit[7].to_i
-    if( (arrSplit[1].to_i & 16) == 0 )
-      ori1 = '+'
-    else
-      ori1 = '-'
-    end
-    if( (arrSplit[1].to_i & 32) == 0 )
-      ori2 = '+'
-    else
-      ori2 = '-'
-    end
-    
-    pass_screen = true
-    ##SCREEN OUT BED INTERSECTIONS
-    screen_out_hash[chrm1].each{ |cc|
-      arrCC = cc.split(/-/)
-      if( arrCC[0].to_i <= pos1 && pos1 <= arrCC[1].to_i )
-        pass_screen = false
-      end
-    }
-    screen_out_hash[chrm2].each{ |cc|
-      arrCC = cc.split(/-/)
-      if( arrCC[0].to_i <= pos2 && pos2 <= arrCC[1].to_i )
-        pass_screen = false
-      end
-    }
-    if( unique_read_id.key?(arrSplit[0]) )
-      if( unique_read_id[arrSplit[0]] != 2 )
-        pass_screen = false
-      end
-    else
-      pass_screen = false
-    end
-    ##OMIT CONSISTENTLY MAPPED INWARD & OUTWARD FACING READ PAIRS
-    if( chrm1 == chrm2 )
-      if( arrSplit[8].to_i.abs <= PARAM_INWARD_MAX ) 
-        if( (pos1 < pos2) && (ori1 == "+" && ori2 == "-") )
-          pass_screen = false
-        elsif( (pos1 > pos2) && (ori1 == "-" && ori2 == "+") )
-          pass_screen = false
-        end
-      elsif( arrSplit[8].to_i.abs <= PARAM_OUTWARD_MAX && arrSplit[8].to_i.abs >= PARAM_OUTWARD_MIN )
-        if( (pos1 < pos2) && (ori1 =="-" && ori2 == "+") )
-          pass_screen = false
-        elsif( (pos1 > pos2) && (ori1 == "+" && ori2 == "-") )
-          pass_screen = false
-        end
-      end
-    end
-    
-    if( pass_screen == true )
-      pass_counter += 1
-      if( pass_counter % 10000 == 0 )
-        print "PASS:#{pass_counter/1000}K ( #{((counter/total.to_f)*100).to_i}% ) ... "
-      end  
-      if(chrm1 < chrm2)
-        chr_key = chrm1 + '-' + chrm2
+  if( arrSplit.include?( UNIQUE_READ_TAG ) || UNIQUE_READ_TAG == nil ) 
+    if( arrSplit[4].to_i >= MIN_MAPPING_QUALITY )
+      id = arrSplit[0]
+      chrm1 = arrSplit[2]
+      pos1 = arrSplit[3].to_i
+      if(arrSplit[6] == '=')
+        chrm2 = arrSplit[2]
       else
-        chr_key = chrm2 + '-' + chrm1
+        chrm2 = arrSplit[6]
       end
-      if(ori1 == ori2)
-        ori_key = 'same'
+      pos2 = arrSplit[7].to_i
+      if( (arrSplit[1].to_i & 16) == 0 )
+        ori1 = '+'
       else
-        ori_key = 'diff'
+        ori1 = '-'
+      end
+      if( (arrSplit[1].to_i & 32) == 0 )
+        ori2 = '+'
+      else
+        ori2 = '-'
       end
       
-      insert_flag = false
-      if( clusterHash.key?( chr_key ) )
-        if( clusterHash[chr_key].key?( ori_key ) )
-          if( clusterHash[chr_key][ori_key].empty? )
-            cluster = Cluster.new(line)
-            clusterHash[chr_key][ori_key].push(cluster)
-          else
-            clusterHash[chr_key][ori_key].each_index{ |ii|
-              if( clusterHash[chr_key][ori_key][ii].intersect?(line) == true )
-                insert_flag = clusterHash[chr_key][ori_key][ii].addBP(line)
-                if( insert_flag == true )
-                  break
-                end
-              end
-            }
-            if( insert_flag == false)
+      pass_screen = true
+      ##SCREEN OUT BED INTERSECTIONS
+      screen_out_hash[chrm1].each{ |cc|
+        arrCC = cc.split(/-/)
+        if( arrCC[0].to_i <= pos1 && pos1 <= arrCC[1].to_i )
+          pass_screen = false
+        end
+      }
+      screen_out_hash[chrm2].each{ |cc|
+        arrCC = cc.split(/-/)
+        if( arrCC[0].to_i <= pos2 && pos2 <= arrCC[1].to_i )
+          pass_screen = false
+        end
+      }
+      if( unique_read_id.key?(arrSplit[0]) )
+        if( unique_read_id[arrSplit[0]] != 2 )
+          pass_screen = false
+        end
+      else
+        pass_screen = false
+      end
+      ##OMIT CONSISTENTLY MAPPED INWARD & OUTWARD FACING READ PAIRS
+      if( chrm1 == chrm2 )
+        if( arrSplit[8].to_i.abs <= PARAM_INWARD_MAX ) 
+          if( (pos1 < pos2) && (ori1 == "+" && ori2 == "-") )
+            pass_screen = false
+          elsif( (pos1 > pos2) && (ori1 == "-" && ori2 == "+") )
+            pass_screen = false
+          end
+        elsif( arrSplit[8].to_i.abs <= PARAM_OUTWARD_MAX && arrSplit[8].to_i.abs >= PARAM_OUTWARD_MIN )
+          if( (pos1 < pos2) && (ori1 =="-" && ori2 == "+") )
+            pass_screen = false
+          elsif( (pos1 > pos2) && (ori1 == "+" && ori2 == "-") )
+            pass_screen = false
+          end
+        end
+      end
+      
+      if( pass_screen == true )
+        pass_counter += 1
+        if( pass_counter % 10000 == 0 )
+          print "PASS:#{pass_counter/1000}K ( #{((counter/total.to_f)*100).to_i}% ) ... "
+        end  
+        if(chrm1 < chrm2)
+          chr_key = chrm1 + '-' + chrm2
+        else
+          chr_key = chrm2 + '-' + chrm1
+        end
+        if(ori1 == ori2)
+          ori_key = 'same'
+        else
+          ori_key = 'diff'
+        end
+        
+        insert_flag = false
+        if( clusterHash.key?( chr_key ) )
+          if( clusterHash[chr_key].key?( ori_key ) )
+            if( clusterHash[chr_key][ori_key].empty? )
               cluster = Cluster.new(line)
               clusterHash[chr_key][ori_key].push(cluster)
+            else
+              clusterHash[chr_key][ori_key].each_index{ |ii|
+                if( clusterHash[chr_key][ori_key][ii].intersect?(line) == true )
+                  insert_flag = clusterHash[chr_key][ori_key][ii].addBP(line)
+                  if( insert_flag == true )
+                    break
+                  end
+                end
+              }
+              if( insert_flag == false)
+                cluster = Cluster.new(line)
+                clusterHash[chr_key][ori_key].push(cluster)
+              end
             end
+          else
+            cluster = Cluster.new(line)
+            clusterHash[chr_key][ori_key].push(cluster)
           end
         else
           cluster = Cluster.new(line)
           clusterHash[chr_key][ori_key].push(cluster)
         end
-      else
-        cluster = Cluster.new(line)
-        clusterHash[chr_key][ori_key].push(cluster)
       end
     end
   end
@@ -1557,10 +1570,14 @@ svp_out = base_name + ".svp"
 svp_out_file = File.open(svp_out, "w")
 bed_out = base_name + ".bed"
 bed_out_file = File.open(bed_out, "w")
+bedpe_out = base_name + ".bedpe"
+bedpe_out_file = File.open(bedpe_out, "w")
 bp_out = base_name + ".lff"
 bp_out_file = File.open(bp_out, "w")
 circos_link = base_name + ".circos.link.txt"
 circos_link_file = File.open(circos_link, "w")
+circos_tile = base_name + ".circos.tile.txt"
+circos_tile_file = File.open(circos_tile, "w")
 
 sv_count = 0
 sv_name_str = nil
@@ -1593,6 +1610,11 @@ clusterHash.each_key{ |kk|
         if( read_cluster_size1 >= (seq_length * MIN_CLUSTER_COUNT) && read_cluster_size2 >= (seq_length * MIN_CLUSTER_COUNT) )
 
           if( clusterHash[kk][oo][ii].getType == "INS" || clusterHash[kk][oo][ii].getType == "DEL" )
+            if( clusterHash[kk][oo][ii].getType == "INS" )
+              color = "lblue"
+            elsif( clusterHash[kk][oo][ii].getType == "DEL" )
+              color = "lred"
+            end
             mid1 = (clusterHash[kk][oo][ii].pos1_min + clusterHash[kk][oo][ii].pos1_max)/2
             mid2 = (clusterHash[kk][oo][ii].pos2_min + clusterHash[kk][oo][ii].pos2_max)/2
             sv_size = 0
@@ -1612,8 +1634,7 @@ clusterHash.each_key{ |kk|
                 bed_out_file.puts "#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_max}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{sv_name_str}#{sv_count}\t#{clusterHash[kk][oo][ii].count}"
                 bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}\tSV\t#{clusterHash[kk][oo][ii].getType}\tchr#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\t#{clusterHash[kk][oo][ii].getOri(1)}\t.\t#{clusterHash[kk][oo][ii].count}"
                 bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}\tSV\t#{clusterHash[kk][oo][ii].getType}\tchr#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{clusterHash[kk][oo][ii].getOri(2)}\t.\t#{clusterHash[kk][oo][ii].count}"
-                circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\tcolor=dgreen"
-                circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\tcolor=dgreen"
+                circos_tile_file.puts "hs#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_max}\t#{clusterHash[kk][oo][ii].pos2_min}\tcolor=#{color}"
               end
             elsif( mid2 < mid1 )
               anno_size = clusterHash[kk][oo][ii].pos1_min - clusterHash[kk][oo][ii].pos2_max
@@ -1623,12 +1644,12 @@ clusterHash.each_key{ |kk|
                 bed_out_file.puts "#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{sv_name_str}#{sv_count}\t#{clusterHash[kk][oo][ii].count}"
                 bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}\tSV\t#{clusterHash[kk][oo][ii].getType}\tchr#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\t#{clusterHash[kk][oo][ii].getOri(1)}\t.\t#{clusterHash[kk][oo][ii].count}"
                 bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}\tSV\t#{clusterHash[kk][oo][ii].getType}\tchr#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{clusterHash[kk][oo][ii].getOri(2)}\t.\t#{clusterHash[kk][oo][ii].count}"
-                circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\tcolor=dgreen"
-                circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\tcolor=dgreen"
+                circos_tile_file.puts "hs#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{clusterHash[kk][oo][ii].pos1_min}\tcolor=#{color}"
               end
             end
             
           elsif( clusterHash[kk][oo][ii].getType == "ITX" )
+            color = "vlpurple"
             mid1 = (clusterHash[kk][oo][ii].pos1_min + clusterHash[kk][oo][ii].pos1_max)/2
             mid2 = (clusterHash[kk][oo][ii].pos2_min + clusterHash[kk][oo][ii].pos2_max)/2
             if( mid1 < mid2 )
@@ -1639,8 +1660,7 @@ clusterHash.each_key{ |kk|
                 bed_out_file.puts "#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_max}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{sv_name_str}#{sv_count}\t#{clusterHash[kk][oo][ii].count}"
                 bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}\tSV\t#{clusterHash[kk][oo][ii].getType}\tchr#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\t#{clusterHash[kk][oo][ii].getOri(1)}\t.\t#{clusterHash[kk][oo][ii].count}"
                 bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}\tSV\t#{clusterHash[kk][oo][ii].getType}\tchr#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{clusterHash[kk][oo][ii].getOri(2)}\t.\t#{clusterHash[kk][oo][ii].count}"
-                circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\tcolor=dgreen"
-                circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\tcolor=dgreen"
+                circos_tile_file.puts "hs#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_max}\t#{clusterHash[kk][oo][ii].pos2_max}\tcolor=#{color}"
               end
             elsif( mid2 < mid1 )
               anno_size = clusterHash[kk][oo][ii].pos1_max - clusterHash[kk][oo][ii].pos2_max
@@ -1650,23 +1670,21 @@ clusterHash.each_key{ |kk|
                 bed_out_file.puts "#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{clusterHash[kk][oo][ii].pos1_max}\t#{sv_name_str}#{sv_count}\t#{clusterHash[kk][oo][ii].count}"
                 bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}\tSV\t#{clusterHash[kk][oo][ii].getType}\tchr#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\t#{clusterHash[kk][oo][ii].getOri(1)}\t.\t#{clusterHash[kk][oo][ii].count}"
                 bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}\tSV\t#{clusterHash[kk][oo][ii].getType}\tchr#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{clusterHash[kk][oo][ii].getOri(2)}\t.\t#{clusterHash[kk][oo][ii].count}"
-                circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\tcolor=dgreen"
-                circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\tcolor=dgreen"
+                circos_tile_file.puts "hs#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{clusterHash[kk][oo][ii].pos1_max}\tcolor=#{color}"
               end
             end
             
           elsif( clusterHash[kk][oo][ii].getType == "CTX" )
             sv_count += 1
             svp_out_file.puts "#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t.\t.\t.\t.\t#{clusterHash[kk][oo][ii].pos1_max}\tMIS\t0\t.\t.\tSVPNAME=#{sv_name_str}#{sv_count};#{sv_name_str}TY=#{clusterHash[kk][oo][ii].getType};#{sv_name_str}O1=#{clusterHash[kk][oo][ii].getOri(1)};#{sv_name_str}O2=#{clusterHash[kk][oo][ii].getOri(2)};#{sv_name_str}NR=#{clusterHash[kk][oo][ii].count};#{sv_name_str}MG=#{clusterHash[kk][oo][ii].merge};#{sv_name_str}CTX=#{clusterHash[kk][oo][ii].chrm2}:#{clusterHash[kk][oo][ii].pos2_min}-#{clusterHash[kk][oo][ii].pos2_max}"
-            bed_out_file.puts "#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\t#{sv_name_str}#{sv_count}\t#{clusterHash[kk][oo][ii].count}"
+            svp_out_file.puts "#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t.\t.\t.\t.\t#{clusterHash[kk][oo][ii].pos2_max}\tMIS\t0\t.\t.\tSVPNAME=#{sv_name_str}#{sv_count};#{sv_name_str}TY=#{clusterHash[kk][oo][ii].getType};#{sv_name_str}O1=#{clusterHash[kk][oo][ii].getOri(2)};#{sv_name_str}O2=#{clusterHash[kk][oo][ii].getOri(1)};#{sv_name_str}NR=#{clusterHash[kk][oo][ii].count};#{sv_name_str}MG=#{clusterHash[kk][oo][ii].merge};#{sv_name_str}CTX=#{clusterHash[kk][oo][ii].chrm1}:#{clusterHash[kk][oo][ii].pos1_min}-#{clusterHash[kk][oo][ii].pos1_max}"
             bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}\tSV\t#{clusterHash[kk][oo][ii].getType}\tchr#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\t#{clusterHash[kk][oo][ii].getOri(1)}\t.\t#{clusterHash[kk][oo][ii].count}"
             bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}\tSV\t#{clusterHash[kk][oo][ii].getType}\tchr#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{clusterHash[kk][oo][ii].getOri(2)}\t.\t#{clusterHash[kk][oo][ii].count}"
-            circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\tcolor=dpurple"
-            circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\tcolor=dpurple"
-            svp_out_file.puts "#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t.\t.\t.\t.\t#{clusterHash[kk][oo][ii].pos2_max}\tMIS\t0\t.\t.\tSVPNAME=#{sv_name_str}#{sv_count};#{sv_name_str}TY=#{clusterHash[kk][oo][ii].getType};#{sv_name_str}O1=#{clusterHash[kk][oo][ii].getOri(2)};#{sv_name_str}O2=#{clusterHash[kk][oo][ii].getOri(1)};#{sv_name_str}NR=#{clusterHash[kk][oo][ii].count};#{sv_name_str}MG=#{clusterHash[kk][oo][ii].merge};#{sv_name_str}CTX=#{clusterHash[kk][oo][ii].chrm1}:#{clusterHash[kk][oo][ii].pos1_min}-#{clusterHash[kk][oo][ii].pos1_max}"
-            bed_out_file.puts "#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{sv_name_str}#{sv_count}\t#{clusterHash[kk][oo][ii].count}"
+            circos_link_file.puts "hs#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\ths#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\tcolor=vdblue"
+            bedpe_out_file.puts "#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\t#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{sv_name_str}#{sv_count}\t#{clusterHash[kk][oo][ii].count}"
             
           elsif( clusterHash[kk][oo][ii].getType == "INV" )
+            color = "lgreen"
             if( clusterHash[kk][oo][ii].inv_merge == 0 )
               mid1 = (clusterHash[kk][oo][ii].pos1_min + clusterHash[kk][oo][ii].pos1_max)/2
               mid2 = (clusterHash[kk][oo][ii].pos2_min + clusterHash[kk][oo][ii].pos2_max)/2
@@ -1679,8 +1697,7 @@ clusterHash.each_key{ |kk|
                     bed_out_file.puts "#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{sv_name_str}#{sv_count}\t#{clusterHash[kk][oo][ii].count}"
                     bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}\tSV\t#{clusterHash[kk][oo][ii].getType}\tchr#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\t#{clusterHash[kk][oo][ii].getOri(1)}\t.\t#{clusterHash[kk][oo][ii].count}"
                     bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}\tSV\t#{clusterHash[kk][oo][ii].getType}\tchr#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{clusterHash[kk][oo][ii].getOri(2)}\t.\t#{clusterHash[kk][oo][ii].count}"
-                    circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\tcolor=dgreen"
-                    circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\tcolor=dgreen"
+                    circos_tile_file.puts "hs#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos2_min}\tcolor=#{color}"
                   end
                 elsif( clusterHash[kk][oo][ii].ori1 == "-" )
                   anno_size = clusterHash[kk][oo][ii].pos2_max - clusterHash[kk][oo][ii].pos1_max
@@ -1690,8 +1707,7 @@ clusterHash.each_key{ |kk|
                     bed_out_file.puts "#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_max}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{sv_name_str}#{sv_count}\t#{clusterHash[kk][oo][ii].count}"
                     bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}\tSV\t#{clusterHash[kk][oo][ii].getType}\tchr#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\t#{clusterHash[kk][oo][ii].getOri(1)}\t.\t#{clusterHash[kk][oo][ii].count}"
                     bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}\tSV\t#{clusterHash[kk][oo][ii].getType}\tchr#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{clusterHash[kk][oo][ii].getOri(2)}\t.\t#{clusterHash[kk][oo][ii].count}"
-                    circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\tcolor=dgreen"
-                    circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\tcolor=dgreen"
+                    circos_tile_file.puts "hs#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_max}\t#{clusterHash[kk][oo][ii].pos2_max}\tcolor=#{color}"
                   end
                 end              
               elsif( mid2 < mid1 )
@@ -1703,8 +1719,7 @@ clusterHash.each_key{ |kk|
                     bed_out_file.puts "#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{sv_name_str}#{sv_count}\t#{clusterHash[kk][oo][ii].count}"
                     bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}\tSV\t#{clusterHash[kk][oo][ii].getType}\tchr#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\t#{clusterHash[kk][oo][ii].getOri(1)}\t.\t#{clusterHash[kk][oo][ii].count}"
                     bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}\tSV\t#{clusterHash[kk][oo][ii].getType}\tchr#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{clusterHash[kk][oo][ii].getOri(2)}\t.\t#{clusterHash[kk][oo][ii].count}"
-                    circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\tcolor=dgreen"
-                    circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\tcolor=dgreen"
+                    circos_tile_file.puts "hs#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos1_min}\tcolor=#{color}"
                   end
                 elsif( clusterHash[kk][oo][ii].ori2 == "-" )
                   anno_size = clusterHash[kk][oo][ii].pos1_max - clusterHash[kk][oo][ii].pos2_max
@@ -1714,8 +1729,7 @@ clusterHash.each_key{ |kk|
                     bed_out_file.puts "#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{clusterHash[kk][oo][ii].pos1_max}\t#{sv_name_str}#{sv_count}\t#{clusterHash[kk][oo][ii].count}"
                     bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}\tSV\t#{clusterHash[kk][oo][ii].getType}\tchr#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\t#{clusterHash[kk][oo][ii].getOri(1)}\t.\t#{clusterHash[kk][oo][ii].count}"
                     bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}\tSV\t#{clusterHash[kk][oo][ii].getType}\tchr#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{clusterHash[kk][oo][ii].getOri(2)}\t.\t#{clusterHash[kk][oo][ii].count}"
-                    circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\tcolor=dgreen"
-                    circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm1}\t#{clusterHash[kk][oo][ii].pos1_min}\t#{clusterHash[kk][oo][ii].pos1_max}\tcolor=dgreen"
+                    circos_tile_file.puts "hs#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{clusterHash[kk][oo][ii].pos1_max}\tcolor=#{color}"
                   end
                 end
               end
@@ -1756,8 +1770,7 @@ clusterHash.each_key{ |kk|
                       bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}.1\tSV\t#{clusterHash[kk][oo][ii].getType}\tchr#{clusterHash[kk][oo][ii].chrm2}\t#{clusterHash[kk][oo][ii].pos2_min}\t#{clusterHash[kk][oo][ii].pos2_max}\t#{clusterHash[kk][oo][ii].getOri(2)}\t.\t#{clusterHash[kk][oo][ii].count}"
                       bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}.2\tSV\t#{clusterHash[clusterHash[kk][oo][ii].inv_hash["chrm"]][clusterHash[kk][oo][ii].inv_hash["ori"]][clusterHash[kk][oo][ii].inv_hash["index"]].getType}\tchr#{clusterHash[clusterHash[kk][oo][ii].inv_hash["chrm"]][clusterHash[kk][oo][ii].inv_hash["ori"]][clusterHash[kk][oo][ii].inv_hash["index"]].chrm1}\t#{clusterHash[clusterHash[kk][oo][ii].inv_hash["chrm"]][clusterHash[kk][oo][ii].inv_hash["ori"]][clusterHash[kk][oo][ii].inv_hash["index"]].pos1_min}\t#{clusterHash[clusterHash[kk][oo][ii].inv_hash["chrm"]][clusterHash[kk][oo][ii].inv_hash["ori"]][clusterHash[kk][oo][ii].inv_hash["index"]].pos1_max}\t#{clusterHash[clusterHash[kk][oo][ii].inv_hash["chrm"]][clusterHash[kk][oo][ii].inv_hash["ori"]][clusterHash[kk][oo][ii].inv_hash["index"]].getOri(1)}\t.\t#{clusterHash[clusterHash[kk][oo][ii].inv_hash["chrm"]][clusterHash[kk][oo][ii].inv_hash["ori"]][clusterHash[kk][oo][ii].inv_hash["index"]].count}"
                       bp_out_file.puts "SVachra\t#{sv_name_str}#{sv_count}.2\tSV\t#{clusterHash[clusterHash[kk][oo][ii].inv_hash["chrm"]][clusterHash[kk][oo][ii].inv_hash["ori"]][clusterHash[kk][oo][ii].inv_hash["index"]].getType}\tchr#{clusterHash[clusterHash[kk][oo][ii].inv_hash["chrm"]][clusterHash[kk][oo][ii].inv_hash["ori"]][clusterHash[kk][oo][ii].inv_hash["index"]].chrm2}\t#{clusterHash[clusterHash[kk][oo][ii].inv_hash["chrm"]][clusterHash[kk][oo][ii].inv_hash["ori"]][clusterHash[kk][oo][ii].inv_hash["index"]].pos2_min}\t#{clusterHash[clusterHash[kk][oo][ii].inv_hash["chrm"]][clusterHash[kk][oo][ii].inv_hash["ori"]][clusterHash[kk][oo][ii].inv_hash["index"]].pos2_max}\t#{clusterHash[clusterHash[kk][oo][ii].inv_hash["chrm"]][clusterHash[kk][oo][ii].inv_hash["ori"]][clusterHash[kk][oo][ii].inv_hash["index"]].getOri(2)}\t.\t#{clusterHash[clusterHash[kk][oo][ii].inv_hash["chrm"]][clusterHash[kk][oo][ii].inv_hash["ori"]][clusterHash[kk][oo][ii].inv_hash["index"]].count}"
-                      circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm1}\t#{sorted[0][1]}\t#{sorted[1][1]}\tcolor=dgreen"
-                      circos_link_file.puts "#{sv_name_str}#{sv_count}\ths#{clusterHash[kk][oo][ii].chrm2}\t#{sorted[2][1]}\t#{sorted[3][1]}\tcolor=dgreen"
+                      circos_tile_file.puts "hs#{clusterHash[kk][oo][ii].chrm1}\t#{sorted[0][1]}\t#{sorted[3][1]}\tcolor=#{color}"
                       clusterHash[clusterHash[kk][oo][ii].inv_hash["chrm"]][clusterHash[kk][oo][ii].inv_hash["ori"]][clusterHash[kk][oo][ii].inv_hash["index"]] = nil
                     end                  
                   end
