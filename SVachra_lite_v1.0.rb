@@ -1029,26 +1029,33 @@ cmd.each_line{ |line|
           screen_out_read_id.push( arrSplit[0] )
         end
       }
-      if( screen_out_read_id.include?(arrSplit[0]) )
-        pass_screen = false
-      end
+
       ##OMIT CONSISTENTLY MAPPED INWARD & OUTWARD FACING READ PAIRS
       if( chrm1 == chrm2 )
         if( arrSplit[8].to_i.abs <= PARAM_INWARD_MAX ) 
           if( (pos1 < pos2) && (ori1 == "+" && ori2 == "-") )
             pass_screen = false
+            screen_out_read_id.push( arrSplit[0] )
           elsif( (pos1 > pos2) && (ori1 == "-" && ori2 == "+") )
             pass_screen = false
+            screen_out_read_id.push( arrSplit[0] )
           end
         elsif( arrSplit[8].to_i.abs <= PARAM_OUTWARD_MAX && arrSplit[8].to_i.abs >= PARAM_OUTWARD_MIN )
           if( (pos1 < pos2) && (ori1 =="-" && ori2 == "+") )
             pass_screen = false
+            screen_out_read_id.push( arrSplit[0] )
           elsif( (pos1 > pos2) && (ori1 == "+" && ori2 == "-") )
             pass_screen = false
+            screen_out_read_id.push( arrSplit[0] )
           end
         end
       end
       
+      ##OMIT PREVOUSLY FILTERED MATES
+      if( pass_screen == true && screen_out_read_id.include?(arrSplit[0]) )
+        pass_screen = false
+      end
+ 
       if( pass_screen == true )
         pass_counter += 1
         if( pass_counter % 10000 == 0 )
@@ -1109,7 +1116,6 @@ cmd.clear
 screen_out_read_id.clear
 
 puts "FINISHED Reading in #{optHash["--BAMFile"]} BAM file and building read clusters."
-
 
 ### CLUSTER QUALITY CONTROL FILTERING
 if( optHash.key?("--SV_QC_Filtering") )
